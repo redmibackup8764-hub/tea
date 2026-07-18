@@ -579,16 +579,17 @@ class CipherBreaker:
     Decorative "cipher break" animation. PURE THEATRE — 100% fake.
 
     Yahan koi asli cryptography nahi hoti, koi asli file/hash/password
-    kahin se nahi aata. Kaam simple hai: ek random target string banti
-    hai, aur uske characters ek-ek karke "lock" hote hain, jabki baaki
-    positions random glyphs cycle karte rehte hain. Wahi classic movie
-    effect jahan password ke digits ek-ek karke freeze hote hain.
+    kahin se nahi aata. Bas random target strings hain jinke characters
+    ek-ek karke "lock" hote hain, jabki baaki positions random glyphs
+    cycle karte rehte hain.
 
-    Loop: key resolve hone ke baad thoda hold, phir naya random target,
-    naya algo, naya sab kuch. Infinite chalta rehta hai.
-
-    Drama ke liye: kabhi kabhi "backtrack" hota hai — kuch locked chars
-    wapas unlock ho jaate hain. Isse animation predictable nahi lagti.
+    CONTINUOUS DESIGN (ye important hai):
+      Ye kabhi restart nahi hota. Jab ek key resolve ho jaati hai, wo
+      wipe nahi hoti — upar `resolved` history me chali jaati hai aur
+      permanently resolved dikhti rehti hai. Neeche turant nayi target
+      shuru ho jaati hai. Attempts counter bhi kabhi reset nahi hota,
+      bas badhta rehta hai. Isliye screen pe ek lagataar chalti hui
+      operation dikhti hai — 100% pe pahunch ke zero pe girna nahi.
     """
 
     # Ye sirf labels hain — asli algorithms ke naam, par yahan inka koi
@@ -610,11 +611,20 @@ class CipherBreaker:
 
     def __init__(self, keylen=32):
         self.base_keylen = keylen
-        self.cycles = 0
-        self.reset()
+        # --- ye saari state PERSISTENT hai, kabhi reset nahi hoti ---
+        self.attempts = random.randint(50_000, 400_000)   # cumulative
+        self.rate = random.uniform(2e5, 8e6)              # fake keys/sec
+        self.resolved = []        # [(key, algo)] — history, kabhi wipe nahi
+        self.feed = []
+        self.session = "".join(random.choice(self.GLYPHS) for _ in range(8))
+        # --- sirf active row ki state naye target pe badalti hai ---
+        self._new_target(first=True)
 
-    def reset(self):
-        """Naya random target + naya algo. Har loop pe call hota hai."""
+    def _new_target(self, first=False):
+        """
+        Sirf ACTIVE row reset hoti hai. History, attempts, session — sab
+        waise ke waise rehte hain. Isliye ye 'restart' nahi lagta.
+        """
         self.keylen = self.base_keylen
         self.target = "".join(random.choice(self.GLYPHS)
                               for _ in range(self.keylen))
@@ -625,15 +635,11 @@ class CipherBreaker:
         self.nlocked = 0
         self.algo = random.choice(self.ALGOS)
         self.stage = 0
-        self.attempts = random.randint(1_000, 90_000)
-        self.rate = random.uniform(2e5, 8e6)      # fake "keys/sec"
-        self.session = "".join(random.choice(self.GLYPHS) for _ in range(8))
-        self.phase = "run"                        # run | done
-        self.next_lock = time.time() + random.uniform(0.05, 0.2)
-        self.hold_until = 0.0
-        self.feed = []
-        self.cycles += 1
-        self._feed(f"session {self.session} :: {self.algo}")
+        self.next_lock = time.time() + random.uniform(0.04, 0.16)
+        if not first:
+            self._feed(f"next target :: {self.algo}")
+        else:
+            self._feed(f"session {self.session} :: {self.algo}")
 
     def _feed(self, text):
         ts = datetime.datetime.now().strftime("%H:%M:%S")
@@ -645,29 +651,19 @@ class CipherBreaker:
         n = max(8, min(64, (n // 4) * 4))
         if n != self.base_keylen:
             self.base_keylen = n
-            self.reset()
+            self._new_target()      # sirf active row, history safe
 
     def update(self, paused=False):
         if paused:
             return
         now = time.time()
 
-        # --- resolved phase ---
-        # Yahan pehle 2.8s ka dead hold tha jisme sab kuch freeze ho jaata
-        # tha. Ab kuch bhi rukta nahi: counter climb karta rehta hai, feed
-        # scroll karti rehti hai, unlocked chars flicker karte rehte hain.
-        # Flash khatam hote hi turant agla cycle — koi gap nahi.
-        if self.phase == "done":
-            self.attempts += int(self.rate * 0.05 * random.uniform(0.5, 1.5))
-            if random.random() < 0.18:
-                self._feed(f"dumping block {random.randint(0, 999):03d}")
-            if now >= self.hold_until:
-                self.reset()
-            return
-
-        # --- fake attempt counter climb ---
+        # Attempts hamesha climb karta hai — kabhi rukta nahi, kabhi
+        # reset nahi hota. Ye hi "continuous" feel ka core hai.
         self.attempts += int(self.rate * 0.05 * random.uniform(0.5, 1.5))
-        self.rate *= random.uniform(0.96, 1.05)   # rate thoda wander kare
+        # Rate ko bounded random walk rakho. Bina clamp ke ye compound
+        # hoke exponentially phat jaata hai (uniform ka mean 1 se upar hai).
+        self.rate = max(2e5, min(9e6, self.rate * random.uniform(0.96, 1.05)))
 
         if now < self.next_lock:
             return
@@ -700,10 +696,14 @@ class CipherBreaker:
                 self.stage = st
                 self._feed(f">> {self.STAGES[st]}")
 
+            # --- KEY RESOLVED ---
+            # Koi hold nahi, koi flash-freeze nahi, koi wipe nahi.
+            # Key history me push hoti hai aur usi frame me agli shuru.
             if self.nlocked >= self.keylen:
-                self.phase = "done"
-                self.hold_until = now + 1.2      # chhota flash, dead pause nahi
-                self._feed("key material resolved")
+                self.resolved.append((self.target, self.algo))
+                self.resolved[:] = self.resolved[-60:]   # memory cap
+                self._feed(f"RESOLVED {self.algo}")
+                self._new_target()
 
     def char_at(self, i):
         """Locked position -> target char. Unlocked -> random cycling glyph."""
@@ -712,6 +712,11 @@ class CipherBreaker:
     @property
     def progress(self):
         return 100.0 * self.nlocked / self.keylen
+
+    @property
+    def count(self):
+        return len(self.resolved)
+
 
 
 # --------------------------------------------------------------------------- #
@@ -911,95 +916,90 @@ def panel_hex(win, y, x, h, w, st, cp, cp_dim):
 
 def panel_crack(win, y, x, h, w, cb, cp, cp_warn, cp_ok, cp_dim):
     """
-    Cipher-break page. Ye poora panel DECORATIVE hai — title me [SIM] likha
+    Cipher-break page. Poora panel DECORATIVE hai — title me [SIM] likha
     hai taaki confusion na ho. Baaki saare panels real telemetry dikhate
     hain, ye sirf eye-candy hai.
 
     Layout (upar se niche):
-        algo + session header
-        key grid (locked chars bright, unlocked flickering)
-        progress bar
-        attempts / rate counters
-        scrolling candidate feed
-        RECOVERED flash jab cycle complete ho
+        active algo + stage + session
+        RESOLVED history  <- ye upar scroll karti hai, kabhi wipe nahi hoti
+        >> active key     <- yahi ek row flicker karti hai
+        progress bar (sirf active row ka)
+        cumulative counters
     """
     draw_box(win, y, x, h, w, "CIPHER BREAK [SIM]", cp)
     iw = w - 4
-    if iw < 12 or h < 6:
+    if iw < 12 or h < 8:
         return
 
     line = y + 1
-    done = cb.phase == "done"
+    bottom = y + h - 1
 
-    # ---- header: algo + stage ---- #
-    safe_addstr(win, line, x + 2, f"{cb.algo}"[:iw], cp | curses.A_BOLD)
+    # ---- header: active algo + session ---- #
+    safe_addstr(win, line, x + 2, cb.algo[:iw], cp | curses.A_BOLD)
     rid = f"#{cb.session}"
-    safe_addstr(win, line, x + w - 2 - len(rid), rid[:iw], cp_dim)
+    if iw > len(cb.algo) + len(rid) + 2:
+        safe_addstr(win, line, x + w - 2 - len(rid), rid, cp_dim)
     line += 1
-
-    stage_txt = "KEY RECOVERED" if done else cb.STAGES[cb.stage]
-    safe_addstr(win, line, x + 2, stage_txt[:iw],
-                (cp_ok | curses.A_BOLD) if done else cp_dim)
+    safe_addstr(win, line, x + 2, cb.STAGES[cb.stage][:iw], cp_dim)
     line += 2
 
-    # ---- key grid: har char apne attribute ke saath ---- #
-    # Groups of 4, screen width ke hisaab se wrap.
-    per_row = max(4, ((iw + 1) // 5) * 4)      # "XXXX " = 5 cols per group
-    idx = 0
-    while idx < cb.keylen and line < y + h - 6:
-        col = x + 2
-        placed = 0
-        while placed < per_row and idx < cb.keylen:
-            for _ in range(4):
-                if idx >= cb.keylen:
-                    break
-                ch = cb.char_at(idx)
-                if cb.locked[idx]:
-                    attr = (cp_ok | curses.A_BOLD) if done else (cp | curses.A_BOLD)
-                else:
-                    attr = cp_dim
-                safe_addstr(win, line, col, ch, attr)
-                col += 1
-                idx += 1
-                placed += 1
-            col += 1  # group gap
-        line += 1
+    # ---- footer block ki jagah reserve karo (progress + 2 counters) ---- #
+    foot_rows = 3
+    list_bottom = bottom - foot_rows - 1
+    if list_bottom <= line:
+        return
 
-    line += 1
+    # ---- active row hamesha sabse niche, uske upar resolved history ---- #
+    # Jitni resolved keys fit hoti hain utni dikhao — sabse nayi sabse niche,
+    # active row ke bilkul upar. History wipe nahi hoti, bas scroll hoti hai.
+    room = list_bottom - line
+    show = cb.resolved[-max(0, room - 1):] if room > 1 else []
 
-    # ---- progress bar ---- #
-    if line < y + h - 1:
-        bw = max(4, iw - 8)
-        attr = cp_ok if done else cp
-        safe_addstr(win, line, x + 2,
-                    f"{bar(cb.progress, bw)}{cb.progress:4.0f}%"[:iw], attr)
-        line += 1
+    def fmt_key(chars, group=4):
+        """Key ko 4-4 ke groups me todo, width ke hisaab se truncate."""
+        out = []
+        for i in range(0, len(chars), group):
+            out.append("".join(chars[i:i + group]))
+        return " ".join(out)
 
-    # ---- fake counters ---- #
-    if line < y + h - 1:
-        safe_addstr(win, line, x + 2,
-                    f"tried {cb.attempts:,}"[:iw], cp_dim)
-        line += 1
-    if line < y + h - 1:
-        rate = cb.rate / 1e6
-        safe_addstr(win, line, x + 2,
-                    f"rate  {rate:.2f}M k/s   cycle {cb.cycles}"[:iw], cp_dim)
-        line += 1
+    ly = list_bottom - len(show)      # bottom-align: sabse nayi key active
+    for key, algo in show:            # row ke bilkul upar chipki rahe
+        if ly >= list_bottom:
+            break
+        if ly >= line:
+            txt = f"[OK] {fmt_key(list(key))}"
+            if iw > len(txt) + len(algo) + 3:
+                txt = f"{txt}  {algo}"
+            safe_addstr(win, ly, x + 2, txt[:iw], cp_ok)
+        ly += 1
 
-    # ---- candidate feed (bacha hua space bhar do) ---- #
-    room = (y + h - 1) - line
-    if room > 0:
-        for i, txt in enumerate(cb.feed[-room:]):
-            safe_addstr(win, line + i, x + 2, txt[:iw], cp_dim)
+    # ---- ACTIVE row: locked chars solid, unlocked flickering ---- #
+    ay = list_bottom
+    safe_addstr(win, ay, x + 2, ">>", cp | curses.A_BOLD)
+    col = x + 5
+    for i in range(cb.keylen):
+        if col >= x + w - 2:
+            break
+        attr = (cp | curses.A_BOLD) if cb.locked[i] else cp_dim
+        safe_addstr(win, ay, col, cb.char_at(i), attr)
+        col += 1
+        if (i + 1) % 4 == 0:
+            col += 1      # group gap
 
-    # ---- RECOVERED flash overlay ---- #
-    if done and h >= 9 and iw >= 18:
-        blink = int(time.time() * 4) % 2 == 0
-        if blink:
-            msg = " ACCESS GRANTED "
-            my = y + h // 2
-            mx = x + max(2, (w - len(msg)) // 2)
-            safe_addstr(win, my, mx, msg[:iw], cp_ok | curses.A_BOLD | curses.A_REVERSE)
+    # ---- progress bar (active row ka) ---- #
+    py = bottom - 3
+    bw = max(4, iw - 8)
+    safe_addstr(win, py, x + 2,
+                f"{bar(cb.progress, bw)}{cb.progress:4.0f}%"[:iw], cp)
+
+    # ---- cumulative counters — ye kabhi reset nahi hote ---- #
+    safe_addstr(win, bottom - 2, x + 2,
+                f"tried    {cb.attempts:,}"[:iw], cp_dim)
+    safe_addstr(win, bottom - 1, x + 2,
+                f"resolved {cb.count} keys @ {cb.rate / 1e6:.2f}M k/s"[:iw],
+                cp_dim)
+
 
 
 # --------------------------------------------------------------------------- #
@@ -1128,7 +1128,7 @@ def main(stdscr):
             else:
                 crack_full = not crack_full
         elif key in (ord("x"), ord("X")):
-            crack.reset()          # abhi ka cycle chhodo, naya shuru karo
+            crack._new_target()    # sirf active row skip, history safe rehti hai
         elif key in (ord("n"), ord("N"), curses.KEY_RIGHT):
             page = (page + 1) % len(PAGES)
         elif key in (ord("p"), ord("P"), curses.KEY_LEFT):
