@@ -33,7 +33,8 @@ Run:
 Controls (Termux extra-keys row use karo):
     q       quit
     space   pause
-    m       matrix rain on/off
+    c       cipher-break page (fullscreen toggle on wide screens)
+    x       crack cycle ko turant recycle karo
     n / p   next / previous page  (chhoti screen pe)
     r       refresh interface list
     + / -   fps up / down
@@ -45,7 +46,6 @@ import re
 import json
 import time
 import random
-import string
 import socket
 import datetime
 import subprocess
@@ -476,48 +476,12 @@ class EventLog:
 
 
 # --------------------------------------------------------------------------- #
-#  SECTION 3 — Cosmetic layer (matrix rain, typing)
+#  SECTION 3 — Cosmetic layer (typing effect, cipher-break animation)
 #
-#  Ye hissa decorative hai — aur honestly decorative hi label kiya gaya hai.
+#  Background matrix rain hata diya gaya hai — background ab saaf black.
+#  Ye hissa decorative hai aur honestly decorative hi label kiya gaya hai.
 #  Data real, chrome cinematic.
 # --------------------------------------------------------------------------- #
-
-class MatrixRain:
-    """Falling glyphs. Phone pe halka rakha gaya hai (har doosra column)."""
-
-    GLYPHS = string.ascii_letters + string.digits + "<>*/\\|#$%&+="
-
-    def __init__(self, h, w, density=2):
-        self.density = max(1, density)
-        self.resize(h, w)
-
-    def resize(self, h, w):
-        self.h = max(1, h)
-        self.w = max(1, w)
-        self.cols = list(range(0, self.w, self.density))
-        self.drops = {c: random.randint(-self.h, 0) for c in self.cols}
-        self.speed = {c: random.uniform(0.25, 0.8) for c in self.cols}
-        self.acc = {c: 0.0 for c in self.cols}
-
-    def draw(self, win, head_attr, tail_attr, advance=True):
-        for c in self.cols:
-            if advance:
-                self.acc[c] += self.speed[c]
-                if self.acc[c] >= 1.0:
-                    self.acc[c] = 0.0
-                    self.drops[c] += 1
-            head = self.drops[c]
-            for i in range(4):
-                y = head - i
-                if 0 <= y < self.h:
-                    try:
-                        win.addstr(y, c, random.choice(self.GLYPHS),
-                                   head_attr if i == 0 else tail_attr)
-                    except curses.error:
-                        pass  # bottom-right cell hamesha raise karta hai
-            if head - 4 > self.h and random.random() < 0.08:
-                self.drops[c] = random.randint(-self.h // 2, 0)
-
 
 class Typer:
     """Character-by-character reveal."""
@@ -688,8 +652,15 @@ class CipherBreaker:
             return
         now = time.time()
 
-        # --- resolved state: thoda hold karo, phir naya cycle ---
+        # --- resolved phase ---
+        # Yahan pehle 2.8s ka dead hold tha jisme sab kuch freeze ho jaata
+        # tha. Ab kuch bhi rukta nahi: counter climb karta rehta hai, feed
+        # scroll karti rehti hai, unlocked chars flicker karte rehte hain.
+        # Flash khatam hote hi turant agla cycle — koi gap nahi.
         if self.phase == "done":
+            self.attempts += int(self.rate * 0.05 * random.uniform(0.5, 1.5))
+            if random.random() < 0.18:
+                self._feed(f"dumping block {random.randint(0, 999):03d}")
             if now >= self.hold_until:
                 self.reset()
             return
@@ -700,10 +671,13 @@ class CipherBreaker:
 
         if now < self.next_lock:
             return
-        self.next_lock = now + random.uniform(0.06, 0.30)
+        # Tight timing — animation lagataar move karti dikhe.
+        self.next_lock = now + random.uniform(0.04, 0.16)
 
-        # --- drama: kabhi kabhi backtrack (6% chance) ---
-        if self.nlocked > 3 and random.random() < 0.06:
+        # --- drama: kabhi kabhi backtrack (4% chance) ---
+        # Ye animation ko rokta nahi, sirf 2 chars wapas unlock karta hai
+        # taaki mechanical na lage. Bilkul nahi chahiye? chance 0.0 kar do.
+        if self.nlocked > 3 and random.random() < 0.04:
             for _ in range(min(2, self.nlocked)):
                 self.nlocked -= 1
                 self.locked[self.order[self.nlocked]] = False
@@ -728,7 +702,7 @@ class CipherBreaker:
 
             if self.nlocked >= self.keylen:
                 self.phase = "done"
-                self.hold_until = now + 2.8
+                self.hold_until = now + 1.2      # chhota flash, dead pause nahi
                 self._feed("key material resolved")
 
     def char_at(self, i):
@@ -1117,7 +1091,6 @@ def main(stdscr):
     CP_DIM = curses.color_pair(1) | curses.A_DIM
 
     h, w = stdscr.getmaxyx()
-    rain = MatrixRain(h, w, density=2 if w < 80 else 1)
     cpu = CPUReader()
     net = NetReader()
     elog = EventLog()
@@ -1132,7 +1105,6 @@ def main(stdscr):
     last_slow = 0.0    # batt, temp, procs  -> har 3s
 
     paused = False
-    show_rain = True
     crack_full = False   # medium/wide pe 'c' se fullscreen crack view
     page = 0
     fps = 30           # phone pe 30 realistic hai; 60 sirf battery jalata hai
@@ -1149,8 +1121,6 @@ def main(stdscr):
             break
         elif key == ord(" "):
             paused = not paused
-        elif key in (ord("m"), ord("M")):
-            show_rain = not show_rain
         elif key in (ord("c"), ord("C")):
             # Narrow pe seedha CRK page pe jump, warna fullscreen toggle.
             if w < 60:
@@ -1174,13 +1144,11 @@ def main(stdscr):
             frame_delay = 1.0 / fps
         elif key == curses.KEY_RESIZE:
             h, w = stdscr.getmaxyx()
-            rain.resize(h, w)
 
         # Resize jo KEY_RESIZE ke bina aa jaye (Termux rotate) usko bhi pakdo.
         nh, nw = stdscr.getmaxyx()
         if (nh, nw) != (h, w):
             h, w = nh, nw
-            rain.resize(h, w)
 
         # ---------------- telemetry sampling ---------------- #
         now = time.time()
@@ -1204,9 +1172,6 @@ def main(stdscr):
 
         # ---------------- render ---------------- #
         stdscr.erase()
-
-        if show_rain:
-            rain.draw(stdscr, CP_CY | curses.A_BOLD, CP_DIM, advance=not paused)
 
         # Header
         host = socket.gethostname()[:18]
@@ -1246,7 +1211,7 @@ def main(stdscr):
             if paused:
                 foot += " ||"
         else:
-            foot = (f"q:quit space:pause m:rain c:crack x:recycle "
+            foot = (f"q:quit space:pause c:crack x:recycle "
                     f"r:refresh  {fps}fps")
             if crack_full:
                 foot += "  [SIM VIEW]"
