@@ -807,7 +807,7 @@ def panel_system(win, y, x, h, w, st, cp, cp_warn, cp_dim):
 
 
 def panel_network(win, y, x, h, w, st, cp, cp_dim):
-    draw_box(win, y, x, h, w, "NET (REAL COUNTERS)", cp)
+    draw_box(win, y, x, h, w, "NET (COUNTERS)", cp)
     iw = w - 4
     line = y + 1
     net = st["net"]
@@ -894,7 +894,7 @@ def panel_procs(win, y, x, h, w, st, cp, cp_dim):
 
 
 def panel_log(win, y, x, h, w, elog, cp, cp_warn, cp_dim):
-    draw_box(win, y, x, h, w, "EVENT LOG (REAL)", cp)
+    draw_box(win, y, x, h, w, "EVENT LOG", cp)
     iw = w - 4
     visible = elog.lines[-(h - 2):] if h > 2 else []
     colors = {"NET": cp | curses.A_BOLD, "PWR": cp_warn, "THRM": cp_warn}
@@ -927,7 +927,7 @@ def panel_crack(win, y, x, h, w, cb, cp, cp_warn, cp_ok, cp_dim):
         progress bar (sirf active row ka)
         cumulative counters
     """
-    draw_box(win, y, x, h, w, "CIPHER BREAK [SIM]", cp)
+    draw_box(win, y, x, h, w, "CIPHER BREAKER", cp)
     iw = w - 4
     if iw < 12 or h < 8:
         return
